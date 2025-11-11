@@ -376,7 +376,7 @@ impl LocalLspStore {
         );
         let pending_workspace_folders: Arc<Mutex<BTreeSet<Uri>>> = Default::default();
 
-        let pending_server = cx.spawn({
+        let pending_server: Task<Result<LanguageServer, anyhow::Error>> = cx.spawn({
             let adapter = adapter.clone();
             let server_name = adapter.name.clone();
             let stderr_capture = stderr_capture.clone();
@@ -402,7 +402,7 @@ impl LocalLspStore {
                 }
 
                 let code_action_kinds = adapter.code_action_kinds();
-                lsp::LanguageServer::new(
+                let server = lsp::LanguageServer::new(
                     stderr_capture,
                     server_id,
                     server_name,
@@ -411,7 +411,8 @@ impl LocalLspStore {
                     code_action_kinds,
                     Some(pending_workspace_folders),
                     cx,
-                )
+                )?;
+                Ok(server)
             }
         });
 
@@ -430,6 +431,17 @@ impl LocalLspStore {
             cx.spawn(async move |cx| {
                 let result = async {
                     let language_server = pending_server.await?;
+                    let language_server = Arc::new(language_server);
+
+                    if let Some(lsp_store) = lsp_store.upgrade() {
+                        lsp_store
+                            .update(cx, |_, cx| {
+                                cx.emit(LspStoreEvent::LanguageServerCreated(
+                                    language_server.clone(),
+                                ));
+                            })
+                            .log_err();
+                    }
 
                     let workspace_config = Self::workspace_configuration_for_adapter(
                         adapter.adapter.clone(),
@@ -472,11 +484,13 @@ impl LocalLspStore {
                     };
                     let language_server = cx
                         .update(|cx| {
-                            language_server.initialize(
-                                initialization_params,
-                                Arc::new(did_change_configuration_params.clone()),
-                                cx,
-                            )
+                            Arc::try_unwrap(language_server)
+                                .expect("language server should have only one reference")
+                                .initialize(
+                                    initialization_params,
+                                    Arc::new(did_change_configuration_params.clone()),
+                                    cx,
+                                )
                         })?
                         .await
                         .inspect_err(|_| {
@@ -3677,6 +3691,7 @@ struct CodeLensData {
 
 #[derive(Debug)]
 pub enum LspStoreEvent {
+    LanguageServerCreated(Arc<LanguageServer>),
     LanguageServerAdded(LanguageServerId, LanguageServerName, Option<WorktreeId>),
     LanguageServerRemoved(LanguageServerId),
     LanguageServerUpdate {

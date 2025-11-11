@@ -280,8 +280,9 @@ enum ProjectClientState {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Event {
+    LanguageServerCreated(Arc<lsp::LanguageServer>),
     LanguageServerAdded(LanguageServerId, LanguageServerName, Option<WorktreeId>),
     LanguageServerRemoved(LanguageServerId),
     LanguageServerLog(LanguageServerId, LanguageServerLogType, String),
@@ -347,6 +348,149 @@ pub enum Event {
     ExpandedAllForEntry(WorktreeId, ProjectEntryId),
     EntryRenamed(ProjectTransaction, ProjectPath, PathBuf),
     AgentLocationChanged,
+}
+
+impl PartialEq for Event {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::LanguageServerCreated(a), Self::LanguageServerCreated(b)) => Arc::ptr_eq(a, b),
+            (Self::LanguageServerAdded(a1, a2, a3), Self::LanguageServerAdded(b1, b2, b3)) => {
+                a1 == b1 && a2 == b2 && a3 == b3
+            }
+            (Self::LanguageServerRemoved(a), Self::LanguageServerRemoved(b)) => a == b,
+            (Self::LanguageServerLog(a1, a2, a3), Self::LanguageServerLog(b1, b2, b3)) => {
+                a1 == b1 && a2 == b2 && a3 == b3
+            }
+            (
+                Self::LanguageServerBufferRegistered {
+                    server_id: a1,
+                    buffer_id: a2,
+                    buffer_abs_path: a3,
+                    name: a4,
+                },
+                Self::LanguageServerBufferRegistered {
+                    server_id: b1,
+                    buffer_id: b2,
+                    buffer_abs_path: b3,
+                    name: b4,
+                },
+            ) => a1 == b1 && a2 == b2 && a3 == b3 && a4 == b4,
+            (
+                Self::ToggleLspLogs {
+                    server_id: a1,
+                    enabled: a2,
+                    toggled_log_kind: a3,
+                },
+                Self::ToggleLspLogs {
+                    server_id: b1,
+                    enabled: b2,
+                    toggled_log_kind: b3,
+                },
+            ) => a1 == b1 && a2 == b2 && a3 == b3,
+            (
+                Self::Toast {
+                    notification_id: a1,
+                    message: a2,
+                },
+                Self::Toast {
+                    notification_id: b1,
+                    message: b2,
+                },
+            ) => a1 == b1 && a2 == b2,
+            (
+                Self::HideToast {
+                    notification_id: a,
+                },
+                Self::HideToast {
+                    notification_id: b,
+                },
+            ) => a == b,
+            (Self::LanguageServerPrompt(_), Self::LanguageServerPrompt(_)) => {
+                // Cannot compare channels
+                false
+            }
+            (Self::LanguageNotFound(a), Self::LanguageNotFound(b)) => a == b,
+            (Self::ActiveEntryChanged(a), Self::ActiveEntryChanged(b)) => a == b,
+            (Self::ActivateProjectPanel, Self::ActivateProjectPanel) => true,
+            (Self::WorktreeAdded(a), Self::WorktreeAdded(b)) => a == b,
+            (Self::WorktreeOrderChanged, Self::WorktreeOrderChanged) => true,
+            (Self::WorktreeRemoved(a), Self::WorktreeRemoved(b)) => a == b,
+            (Self::WorktreeUpdatedEntries(a1, a2), Self::WorktreeUpdatedEntries(b1, b2)) => {
+                a1 == b1 && a2 == b2
+            }
+            (
+                Self::DiskBasedDiagnosticsStarted {
+                    language_server_id: a,
+                },
+                Self::DiskBasedDiagnosticsStarted {
+                    language_server_id: b,
+                },
+            ) => a == b,
+            (
+                Self::DiskBasedDiagnosticsFinished {
+                    language_server_id: a,
+                },
+                Self::DiskBasedDiagnosticsFinished {
+                    language_server_id: b,
+                },
+            ) => a == b,
+            (
+                Self::DiagnosticsUpdated {
+                    paths: a1,
+                    language_server_id: a2,
+                },
+                Self::DiagnosticsUpdated {
+                    paths: b1,
+                    language_server_id: b2,
+                },
+            ) => a1 == b1 && a2 == b2,
+            (Self::RemoteIdChanged(a), Self::RemoteIdChanged(b)) => a == b,
+            (Self::DisconnectedFromHost, Self::DisconnectedFromHost) => true,
+            (Self::DisconnectedFromSshRemote, Self::DisconnectedFromSshRemote) => true,
+            (Self::Closed, Self::Closed) => true,
+            (Self::DeletedEntry(a1, a2), Self::DeletedEntry(b1, b2)) => a1 == b1 && a2 == b2,
+            (
+                Self::CollaboratorUpdated {
+                    old_peer_id: a1,
+                    new_peer_id: a2,
+                },
+                Self::CollaboratorUpdated {
+                    old_peer_id: b1,
+                    new_peer_id: b2,
+                },
+            ) => a1 == b1 && a2 == b2,
+            (Self::CollaboratorJoined(a), Self::CollaboratorJoined(b)) => a == b,
+            (Self::CollaboratorLeft(a), Self::CollaboratorLeft(b)) => a == b,
+            (Self::HostReshared, Self::HostReshared) => true,
+            (Self::Reshared, Self::Reshared) => true,
+            (Self::Rejoined, Self::Rejoined) => true,
+            (
+                Self::RefreshInlayHints {
+                    server_id: a1,
+                    request_id: a2,
+                },
+                Self::RefreshInlayHints {
+                    server_id: b1,
+                    request_id: b2,
+                },
+            ) => a1 == b1 && a2 == b2,
+            (Self::RefreshCodeLens, Self::RefreshCodeLens) => true,
+            (Self::RevealInProjectPanel(a), Self::RevealInProjectPanel(b)) => a == b,
+            (Self::SnippetEdit(_, _), Self::SnippetEdit(_, _)) => {
+                // Snippet is not PartialEq
+                false
+            }
+            (Self::ExpandedAllForEntry(a1, a2), Self::ExpandedAllForEntry(b1, b2)) => {
+                a1 == b1 && a2 == b2
+            }
+            (Self::EntryRenamed(_, _, _), Self::EntryRenamed(_, _, _)) => {
+                // ProjectTransaction is not PartialEq
+                false
+            }
+            (Self::AgentLocationChanged, Self::AgentLocationChanged) => true,
+            _ => false,
+        }
+    }
 }
 
 pub struct AgentLocationChanged;
@@ -3048,15 +3192,12 @@ impl Project {
         cx: &mut Context<Self>,
     ) {
         match event {
-            LspStoreEvent::DiagnosticsUpdated { server_id, paths } => {
-                cx.emit(Event::DiagnosticsUpdated {
-                    paths: paths.clone(),
-                    language_server_id: *server_id,
-                })
+            LspStoreEvent::LanguageServerCreated(server) => {
+                cx.emit(Event::LanguageServerCreated(server.clone()));
             }
-            LspStoreEvent::LanguageServerAdded(server_id, name, worktree_id) => cx.emit(
-                Event::LanguageServerAdded(*server_id, name.clone(), *worktree_id),
-            ),
+            LspStoreEvent::LanguageServerAdded(id, name, worktree_id) => {
+                cx.emit(Event::LanguageServerAdded(*id, name.clone(), *worktree_id));
+            }
             LspStoreEvent::LanguageServerRemoved(server_id) => {
                 cx.emit(Event::LanguageServerRemoved(*server_id))
             }
@@ -3140,14 +3281,14 @@ impl Project {
                 notification_id: "lsp".into(),
                 message: message.clone(),
             }),
-            LspStoreEvent::SnippetEdit {
-                buffer_id,
-                edits,
-                most_recent_edit,
-            } => {
-                if most_recent_edit.replica_id == self.replica_id() {
-                    cx.emit(Event::SnippetEdit(*buffer_id, edits.clone()))
-                }
+            LspStoreEvent::SnippetEdit { buffer_id, edits, .. } => {
+                cx.emit(Event::SnippetEdit(*buffer_id, edits.clone()));
+            }
+            LspStoreEvent::DiagnosticsUpdated { paths, server_id } => {
+                cx.emit(Event::DiagnosticsUpdated {
+                    paths: paths.clone(),
+                    language_server_id: *server_id,
+                });
             }
         }
     }

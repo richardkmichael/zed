@@ -261,6 +261,16 @@ impl LogStore {
                             }
                         };
                         match event {
+                            crate::Event::LanguageServerCreated(server) => {
+                                log_store.add_language_server(
+                                    server_kind.clone(),
+                                    server.server_id(),
+                                    Some(server.name()),
+                                    None,
+                                    Some(server.clone()),
+                                    cx,
+                                );
+                            }
                             crate::Event::LanguageServerAdded(id, name, worktree_id) => {
                                 log_store.add_language_server(
                                     server_kind,
