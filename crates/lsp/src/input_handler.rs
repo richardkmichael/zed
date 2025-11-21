@@ -21,7 +21,7 @@ const HEADER_DELIMITER: &[u8; 4] = b"\r\n\r\n";
 /// Handler for stdout of language server.
 pub struct LspStdoutHandler {
     pub(super) loop_handle: Task<Result<()>>,
-    pub(super) incoming_messages: UnboundedReceiver<NotificationOrRequest>,
+    pub(super) incoming_messages_raw: UnboundedReceiver<String>,
 }
 
 async fn read_headers<Stdout>(reader: &mut BufReader<Stdout>, buffer: &mut Vec<u8>) -> Result<()>
@@ -46,24 +46,32 @@ impl LspStdoutHandler {
         stdout: Input,
         response_handlers: Arc<Mutex<Option<HashMap<RequestId, ResponseHandler>>>>,
         io_handlers: Arc<Mutex<HashMap<i32, IoHandler>>>,
+        io_history_buffer: Arc<Mutex<Vec<(String, IoKind)>>>,
         cx: BackgroundExecutor,
     ) -> Self
     where
         Input: AsyncRead + Unpin + Send + 'static,
     {
-        let (tx, notifications_channel) = unbounded();
-        let loop_handle = cx.spawn(Self::handler(stdout, tx, response_handlers, io_handlers));
+        let (tx, incoming_messages_raw) = unbounded();
+        let loop_handle = cx.spawn(Self::handler(
+            stdout,
+            tx,
+            response_handlers,
+            io_handlers,
+            io_history_buffer,
+        ));
         Self {
             loop_handle,
-            incoming_messages: notifications_channel,
+            incoming_messages_raw,
         }
     }
 
     async fn handler<Input>(
         stdout: Input,
-        notifications_sender: UnboundedSender<NotificationOrRequest>,
+        notifications_sender: UnboundedSender<String>,
         response_handlers: Arc<Mutex<Option<HashMap<RequestId, ResponseHandler>>>>,
         io_handlers: Arc<Mutex<HashMap<i32, IoHandler>>>,
+        io_history_buffer: Arc<Mutex<Vec<(String, IoKind)>>>,
     ) -> anyhow::Result<()>
     where
         Input: AsyncRead + Unpin + Send + 'static,
@@ -91,14 +99,20 @@ impl LspStdoutHandler {
             stdout.read_exact(&mut buffer).await?;
 
             if let Ok(message) = str::from_utf8(&buffer) {
+                // Store in history buffer
+                io_history_buffer.lock().push((message.to_string(), IoKind::StdOut));
+
                 log::trace!("incoming message: {message}");
                 for handler in io_handlers.lock().values_mut() {
                     handler(IoKind::StdOut, message);
                 }
             }
 
-            if let Ok(msg) = serde_json::from_slice::<NotificationOrRequest>(&buffer) {
-                notifications_sender.unbounded_send(msg)?;
+            // Send raw message string through the channel
+            if let Ok(_) = serde_json::from_slice::<NotificationOrRequest>(&buffer) {
+                if let Ok(message_str) = str::from_utf8(&buffer) {
+                    notifications_sender.unbounded_send(message_str.to_string())?;
+                }
             } else if let Ok(AnyResponse {
                 id, error, result, ..
             }) = serde_json::from_slice(&buffer)

@@ -431,32 +431,6 @@ impl LocalLspStore {
             cx.spawn(async move |cx| {
                 let result = async {
                     let language_server = pending_server.await?;
-                    let language_server = Arc::new(language_server);
-
-                    if let Some(lsp_store) = lsp_store.upgrade() {
-                        lsp_store
-                            .update(cx, |lsp_store, cx| {
-                                // Store Arc in Starting state
-                                if let Some(local) = lsp_store.as_local_mut() {
-                                    if let Some(LanguageServerState::Starting { server, .. }) =
-                                        local.language_servers.get_mut(&server_id)
-                                    {
-                                        *server = Some(language_server.clone());
-                                    }
-                                }
-
-                                // Emit event with metadata only
-                                cx.emit(LspStoreEvent::LanguageServerCreated(
-                                    server_id,
-                                    adapter.name.clone(),
-                                    Some(key.worktree_id),
-                                ));
-                            })
-                            .log_err();
-                    }
-
-                    // Drop our local reference so registry has the only copy
-                    drop(language_server);
 
                     let workspace_config = Self::workspace_configuration_for_adapter(
                         adapter.adapter.clone(),
@@ -480,72 +454,31 @@ impl LocalLspStore {
                         _ => {}
                     }
 
-                    // Retrieve Arc from registry to prepare initialization params
-                    let initialization_params = if let Some(lsp_store) = lsp_store.upgrade() {
-                        lsp_store.update(cx, |lsp_store, cx| {
-                            let server = lsp_store
-                                .as_local()
-                                .ok_or_else(|| anyhow::anyhow!("not a local lsp store"))?
-                                .language_server_for_id(server_id)
-                                .ok_or_else(|| anyhow::anyhow!("language server not in registry"))?;
-                            let mut params =
-                                server.default_initialize_params(pull_diagnostics, cx);
-                            params.initialization_options = initialization_options;
-                            adapter.adapter.prepare_initialize_params(params, cx)
-                        })?
-                    } else {
-                        anyhow::bail!("lsp store dropped")
-                    }?;
+                    let initialization_params = cx.update(|cx| {
+                        let mut params =
+                            language_server.default_initialize_params(pull_diagnostics, cx);
+                        params.initialization_options = initialization_options;
+                        adapter.adapter.prepare_initialize_params(params, cx)
+                    })??;
 
-                    // Retrieve Arc from registry for setup_lsp_messages
-                    if let Some(store) = lsp_store.upgrade() {
-                        if let Some(server) = store.update(cx, |lsp_store, _| {
-                            lsp_store.as_local().and_then(|local| local.language_server_for_id(server_id))
-                        })? {
-                            Self::setup_lsp_messages(
-                                lsp_store.clone(),
-                                &server,
-                                delegate.clone(),
-                                adapter.clone(),
-                            );
-                        }
-                    }
+                    Self::setup_lsp_messages(
+                        lsp_store.clone(),
+                        &language_server,
+                        delegate.clone(),
+                        adapter.clone(),
+                    );
 
                     let did_change_configuration_params = lsp::DidChangeConfigurationParams {
                         settings: workspace_config,
                     };
 
-                    // Take Arc out of registry to unwrap it
-                    let language_server = if let Some(lsp_store) = lsp_store.upgrade() {
-                        lsp_store.update(cx, |lsp_store, _| {
-                            if let Some(local) = lsp_store.as_local_mut() {
-                                if let Some(LanguageServerState::Starting { server, .. }) =
-                                    local.language_servers.get_mut(&server_id)
-                                {
-                                    server.take()
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        })?
-                    } else {
-                        None
-                    };
-
-                    let language_server = language_server
-                        .ok_or_else(|| anyhow::anyhow!("language server not found in registry"))?;
-
                     let language_server = cx
                         .update(|cx| {
-                            Arc::try_unwrap(language_server)
-                                .expect("language server should have only one reference")
-                                .initialize(
-                                    initialization_params,
-                                    Arc::new(did_change_configuration_params.clone()),
-                                    cx,
-                                )
+                            language_server.initialize(
+                                initialization_params,
+                                Arc::new(did_change_configuration_params.clone()),
+                                cx,
+                            )
                         })?
                         .await
                         .inspect_err(|_| {
@@ -608,7 +541,6 @@ impl LocalLspStore {
         };
         let state = LanguageServerState::Starting {
             startup,
-            server: None,
             pending_workspace_folders,
         };
 
@@ -3609,13 +3541,12 @@ impl LocalLspStore {
     }
 
     fn language_server_for_id(&self, id: LanguageServerId) -> Option<Arc<LanguageServer>> {
-        match self.language_servers.get(&id) {
-            Some(LanguageServerState::Running { server, .. }) => Some(server.clone()),
-            Some(LanguageServerState::Starting { server, .. }) => server.clone(),
-            None => self
-                .supplementary_language_servers
-                .get(&id)
-                .map(|(_, server)| Arc::clone(server)),
+        if let Some(LanguageServerState::Running { server, .. }) = self.language_servers.get(&id) {
+            Some(server.clone())
+        } else if let Some((_, server)) = self.supplementary_language_servers.get(&id) {
+            Some(Arc::clone(server))
+        } else {
+            None
         }
     }
 }
@@ -3748,7 +3679,6 @@ struct CodeLensData {
 
 #[derive(Debug)]
 pub enum LspStoreEvent {
-    LanguageServerCreated(LanguageServerId, LanguageServerName, Option<WorktreeId>),
     LanguageServerAdded(LanguageServerId, LanguageServerName, Option<WorktreeId>),
     LanguageServerRemoved(LanguageServerId),
     LanguageServerUpdate {
@@ -13371,8 +13301,6 @@ pub struct WorkspaceRefreshTask {
 pub enum LanguageServerState {
     Starting {
         startup: Task<Option<Arc<LanguageServer>>>,
-        /// The server instance, available once spawned but before initialization completes.
-        server: Option<Arc<LanguageServer>>,
         /// List of language servers that will be added to the workspace once it's initialization completes.
         pending_workspace_folders: Arc<Mutex<BTreeSet<Uri>>>,
     },

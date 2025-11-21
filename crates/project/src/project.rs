@@ -282,7 +282,6 @@ enum ProjectClientState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
-    LanguageServerCreated(LanguageServerId, LanguageServerName, Option<WorktreeId>),
     LanguageServerAdded(LanguageServerId, LanguageServerName, Option<WorktreeId>),
     LanguageServerRemoved(LanguageServerId),
     LanguageServerLog(LanguageServerId, LanguageServerLogType, String),
@@ -3049,9 +3048,6 @@ impl Project {
         cx: &mut Context<Self>,
     ) {
         match event {
-            LspStoreEvent::LanguageServerCreated(id, name, worktree_id) => {
-                cx.emit(Event::LanguageServerCreated(*id, name.clone(), *worktree_id));
-            }
             LspStoreEvent::LanguageServerAdded(id, name, worktree_id) => {
                 cx.emit(Event::LanguageServerAdded(*id, name.clone(), *worktree_id));
             }

@@ -269,20 +269,6 @@ impl LogStore {
                         // emit Added, not Created. Future optimization: distinguish server types
                         // or add Created emission for supplementary servers to eliminate redundancy.
                         match event {
-                            crate::Event::LanguageServerCreated(id, name, worktree_id) => {
-                                log_store.add_language_server(
-                                    server_kind.clone(),
-                                    *id,
-                                    Some(name.clone()),
-                                    *worktree_id,
-                                    project
-                                        .read(cx)
-                                        .lsp_store()
-                                        .read(cx)
-                                        .language_server_for_id(*id),
-                                    cx,
-                                );
-                            }
                             crate::Event::LanguageServerAdded(id, name, worktree_id) => {
                                 log_store.add_language_server(
                                     server_kind,
